@@ -16,10 +16,10 @@
       "purpose": "any maskable"
     }
   ],
-  "start_url": "./",
+  "start_url": "/HanziFlow/",
   "display": "standalone",
   "theme_color": "#b91c1c",
   "background_color": "#fcfaf2",
   "orientation": "any",
-  "scope": "./"
+  "scope": "/HanziFlow/"
 }
