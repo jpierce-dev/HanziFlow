@@ -1,0 +1,5 @@
+{
+  "name": "HanziFlow - 汉字流",
+  "description": "A high-quality Chinese character learning application designed for tablets. Search characters by Pinyin, view animated stroke orders in traditional Tian Zi Ge grids, and explore character meanings with Gemini AI.",
+  "requestFramePermissions": []
+}
