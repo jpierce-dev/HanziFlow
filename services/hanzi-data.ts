@@ -267,17 +267,45 @@ const searchFromZdict = (pinyinPrefix: string): SearchResult[] => {
   return results;
 };
 
-// 根据拼音搜索汉字（使用 cnchar + zdict 近似搜索）
-export const searchCharactersByPinyin = async (pinyin: string): Promise<SearchResult[]> => {
-  // 移除音调，转换为小写
-  const normalizedPinyin = pinyin.toLowerCase().replace(/[1-5]/g, '');
-
-  if (!normalizedPinyin || normalizedPinyin.length === 0) {
+// 根据拼音或汉字搜索汉字（使用 cnchar + zdict 近似搜索）
+export const searchCharactersByPinyin = async (keyword: string): Promise<SearchResult[]> => {
+  if (!keyword || keyword.trim().length === 0) {
     return [];
   }
 
   const results: SearchResult[] = [];
   const foundChars = new Set<string>();
+
+  // 检查是否包含汉字
+  const hasHanzi = /[\u4e00-\u9fa5]/.test(keyword);
+  if (hasHanzi) {
+    // 提取搜索词中的所有汉字
+    const chars = keyword.match(/[\u4e00-\u9fa5]/g) || [];
+    for (const char of chars) {
+      if (foundChars.has(char)) continue;
+      foundChars.add(char);
+
+      const pinyinResult = cnchar.spell(char, 'tone', 'low');
+      const pinyinStr = Array.isArray(pinyinResult) ? pinyinResult[0] : pinyinResult;
+
+      const cached = MEANING_CACHE[char];
+      const zdictResult = ZDICT_LOADED ? getMeaningFromZdict(char) : null;
+      const meaning = zdictResult?.meaning || cached?.meaning || "常用汉字";
+      const brief = meaning.split('，')[0]?.split(',')[0] || meaning || "常用汉字";
+
+      results.push({
+        char,
+        pinyin: pinyinStr,
+        brief
+      });
+    }
+
+    // 如果直接输入的是汉字，优先返回匹配的汉字
+    if (results.length > 0) return results.slice(0, 12);
+  }
+
+  // 移除音调，转换为小写用于拼音搜索
+  const normalizedPinyin = keyword.toLowerCase().replace(/[1-5]/g, '');
 
   // 方法1: 尝试使用 cnchar 精确搜索
   try {
