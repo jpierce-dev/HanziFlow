@@ -112,12 +112,13 @@ const loadZdictData = async (): Promise<void> => {
   }
 
   // 尝试从多个可能的路径加载 zdict.js 数据
-  // zdict.js 的数据文件实际在 js/data-chars.js，但我们需要 JSON 格式
+  // 获取项目的 base URL，确保在 GitHub Pages 的子目录下资源引用正确
+  const baseUrl = (import.meta as any).env.BASE_URL || '/';
+
   const possiblePaths = [
-    '/zdict-data.json',  // 本地 JSON 文件（推荐）
-    '/data/zdict.json',   // 备用本地路径
-    // 注意：zdict.js 的原始数据是 JS 格式，需要手动转换为 JSON
-    // 运行 npm run download-zdict 可以自动从 @xiee/zdict 包提取数据
+    `${baseUrl}zdict-data.json`,  // 自动适配 base URL 的路径
+    './zdict-data.json',           // 相对当前页面的路径
+    '/zdict-data.json',            // 根路径（备用）
   ];
 
   let lastError: Error | null = null;
