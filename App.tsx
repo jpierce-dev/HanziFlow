@@ -12,6 +12,7 @@ const App: React.FC = () => {
   const [detail, setDetail] = useState<HanziInfo | null>(null);
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [playingText, setPlayingText] = useState<string | null>(null);
+  const [windowWidth, setWindowWidth] = useState(typeof window !== 'undefined' ? window.innerWidth : 1024);
 
   const handleSearch = async (pinyin: string) => {
     setLoading(true);
@@ -66,6 +67,12 @@ const App: React.FC = () => {
     init();
   }, []);
 
+  useEffect(() => {
+    const handleResize = () => setWindowWidth(window.innerWidth);
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
 
   return (
     <div className="h-screen flex flex-col bg-[#fcfaf2] safe-area-inset overflow-hidden">
@@ -94,7 +101,7 @@ const App: React.FC = () => {
 
       <main className="flex-1 overflow-hidden flex flex-col md:flex-row">
         {/* 侧边搜索栏 */}
-        <aside className="w-full md:w-[320px] lg:w-[380px] border-r border-red-50 bg-[#faf8f0] flex flex-col overflow-hidden">
+        <aside className="w-full md:w-[260px] lg:w-[280px] border-r border-red-50 bg-[#faf8f0] flex flex-col overflow-hidden">
           <div className="p-4 md:p-6 flex-1 flex flex-col min-h-0">
             <SearchBar onSearch={handleSearch} isLoading={loading} />
             <div className="grid grid-cols-4 md:grid-cols-3 gap-3 overflow-y-auto pr-1 pb-4 custom-scrollbar">
@@ -115,9 +122,14 @@ const App: React.FC = () => {
 
         {/* 内容展示区 */}
         <section className="flex-1 overflow-y-auto p-4 md:p-10 bg-white/30 backdrop-blur-sm">
-          <div className="max-w-5xl mx-auto flex flex-col lg:flex-row gap-8 lg:gap-16 items-start">
-            <div className="w-full lg:w-auto flex flex-col items-center lg:sticky lg:top-0">
-              <TianZiGe character={selectedChar} size={window.innerWidth < 768 ? 320 : 450} />
+          <div className="max-w-6xl mx-auto flex flex-col lg:flex-row gap-6 lg:gap-12 items-start">
+            <div className="w-full lg:w-auto flex flex-col items-center lg:sticky lg:top-8">
+              <TianZiGe
+                character={selectedChar}
+                size={
+                  windowWidth < 640 ? 260 : (windowWidth < 1280 ? 300 : 380)
+                }
+              />
             </div>
 
             <div className="flex-1 w-full space-y-8 pb-10">
@@ -126,7 +138,7 @@ const App: React.FC = () => {
                   <div className="flex items-end justify-between border-b-4 border-red-600 pb-8 mb-10">
                     <div>
                       <div className="flex items-center gap-4 mb-2">
-                        <h2 className="text-8xl font-black text-gray-900 leading-none cursor-pointer hover:text-red-700 transition-colors" onClick={() => handleSpeak(detail.character)}>
+                        <h2 className="text-6xl sm:text-7xl lg:text-8xl font-black text-gray-900 leading-none cursor-pointer hover:text-red-700 transition-colors" onClick={() => handleSpeak(detail.character)}>
                           {detail.character}
                         </h2>
                         <button
@@ -142,7 +154,7 @@ const App: React.FC = () => {
 
                   <div className="mb-12">
                     <h3 className="text-sm font-bold text-red-800/40 uppercase mb-4 tracking-widest">释义</h3>
-                    <p className="text-3xl text-gray-800 leading-relaxed font-serif">{detail.meaning}</p>
+                    <p className="text-2xl md:text-3xl text-gray-800 leading-relaxed font-serif">{detail.meaning}</p>
                   </div>
 
                   <div>
@@ -155,7 +167,7 @@ const App: React.FC = () => {
                           className={`group p-6 bg-white rounded-3xl shadow-sm border-2 flex items-center justify-between transition-all ${playingText === ex ? 'border-red-500 bg-red-50 ring-2 ring-red-200' : 'border-transparent hover:border-red-100 hover:shadow-md'
                             }`}
                         >
-                          <span className="text-3xl font-bold text-gray-800">{ex}</span>
+                          <span className="text-2xl md:text-3xl font-bold text-gray-800">{ex}</span>
                           <div className={`w-12 h-12 rounded-full flex items-center justify-center transition-colors ${playingText === ex ? 'bg-red-500 text-white animate-pulse' : 'bg-red-50 text-red-400'}`}>
                             {playingText === ex ? '🔊' : '▶'}
                           </div>
