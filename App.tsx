@@ -94,7 +94,14 @@ const App: React.FC = () => {
               <span className="text-xs font-bold text-amber-700">同步中...</span>
             </div>
           ) : (
-            <div className="hidden sm:block text-xs font-medium text-gray-400">Ready</div>
+            <button
+              onClick={() => window.location.reload()}
+              className="px-3 py-1 bg-gray-50 hover:bg-gray-100 text-gray-400 hover:text-red-600 rounded-full border border-gray-100 transition-all flex items-center gap-1.5 active:scale-95"
+              title="点击刷新页面"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="animate-hover-spin"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" /><path d="M21 3v5h-5" /><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" /><path d="M3 21v-5h5" /></svg>
+              <span className="text-xs font-bold">刷新</span>
+            </button>
           )}
         </div>
       </header>
