@@ -290,8 +290,11 @@ export const searchCharactersByPinyin = async (keyword: string): Promise<SearchR
   // 辅助函数：添加结果
   const addResult = (result: SearchResult) => {
     // 构造唯一键：字符+拼音
-    // 注意：ZDICT返回的拼音带声调，cnchar拼接的也带。
-    const key = `${result.char}_${result.pinyin}`;
+    // 安全处理 pinyin 可能是字符串或数组的情况
+    const pinyinStr = Array.isArray(result.pinyin)
+      ? result.pinyin.join('/')
+      : result.pinyin;
+    const key = `${result.char}_${pinyinStr}`;
 
     if (foundKeys.has(key)) return;
 
