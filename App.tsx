@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import SearchBar from './components/SearchBar';
 import TianZiGe from './components/TianZiGe';
 import { searchCharactersByPinyin, getCharacterDetails, speakText, getAudioContext, getRandomInitialResults } from './services/hanzi-data';
@@ -14,46 +14,62 @@ const App: React.FC = () => {
   const [playingText, setPlayingText] = useState<string | null>(null);
   const [windowWidth, setWindowWidth] = useState(typeof window !== 'undefined' ? window.innerWidth : 1024);
 
-  const handleSearch = async (pinyin: string) => {
+  // 使用 Ref 来保持 handleSelectChar 的稳定引用，避免在 handleSearch 中产生依赖
+  const selectCharRef = useRef<((char: string) => Promise<void>) | null>(null);
+
+  const handleSelectChar = useCallback(async (char: string) => {
+    setSelectedChar(prev => {
+      // 只有在字符真的改变，或者还没有详情时才加载
+      if (prev === char && detailRef.current) return prev;
+
+      setLoadingDetail(true);
+      getCharacterDetails(char).then(data => {
+        setDetail(data);
+        detailRef.current = data; // 同步更新 ref
+        setLoadingDetail(false);
+      }).catch(e => {
+        console.error("Detail failed", e);
+        setLoadingDetail(false);
+      });
+
+      return char;
+    });
+  }, []); // 真正的稳定引用
+
+  // 保存到 ref 供 handleSearch 使用
+  useEffect(() => {
+    selectCharRef.current = handleSelectChar;
+  }, [handleSelectChar]);
+
+  const detailRef = useRef<HanziInfo | null>(null);
+
+  const handleSearch = useCallback(async (pinyin: string) => {
     setLoading(true);
     try {
       const data = await searchCharactersByPinyin(pinyin);
       setResults(data);
-      if (data.length > 0) handleSelectChar(data[0].char);
+      if (data.length > 0 && selectCharRef.current) {
+        selectCharRef.current(data[0].char);
+      }
     } catch (e) {
       console.error("Search failed", e);
     }
     setLoading(false);
-  };
+  }, []);
 
-  const handleSelectChar = async (char: string) => {
-    if (char === selectedChar && detail) return;
-    setSelectedChar(char);
-    setLoadingDetail(true);
-    try {
-      const data = await getCharacterDetails(char);
-      setDetail(data);
-    } catch (e) {
-      console.error("Detail failed", e);
-    }
-    setLoadingDetail(false);
-  };
-
-  const handleSpeak = async (text: string) => {
+  const handleSpeak = useCallback(async (text: string) => {
     if (playingText) return;
 
     setPlayingText(text);
     try {
-      // 使用浏览器内置TTS
       await speakText(text, null as any);
-      // 估算语音时长
-      const duration = text.length * 200; // 每个字符约200ms
+      const duration = text.length * 200;
       setTimeout(() => setPlayingText(null), duration);
     } catch (e) {
       console.error("Speak process failed:", e);
       setPlayingText(null);
     }
-  };
+  }, [playingText]);
 
   useEffect(() => {
     // 初始化随机汉字（确保有12个）
@@ -112,17 +128,32 @@ const App: React.FC = () => {
           <div className="p-4 md:p-6 flex-1 flex flex-col min-h-0">
             <SearchBar onSearch={handleSearch} isLoading={loading} />
             <div className="grid grid-cols-4 md:grid-cols-3 gap-3 overflow-y-auto pr-1 pb-4 custom-scrollbar">
-              {(results.length > 0 ? results : Array(12).fill({ char: '?', pinyin: '...' }).map((x, i) => ({ ...x }))).map((res, idx) => (
-                <button
-                  key={idx}
-                  onClick={() => res.char !== '?' && handleSelectChar(res.char)}
-                  className={`aspect-square bg-white rounded-xl shadow-sm border-2 flex flex-col items-center justify-center transition-all ${selectedChar === res.char ? 'border-red-500 bg-red-50 shadow-md' : 'border-transparent'
-                    } ${res.char === '?' ? 'opacity-30' : ''}`}
-                >
-                  <span className="text-2xl md:text-3xl font-bold text-gray-800">{res.char}</span>
-                  <span className="text-[10px] text-red-500/60 uppercase">{res.pinyin}</span>
-                </button>
-              ))}
+              {results.length > 0 ? (
+                results.map((res, idx) => (
+                  <button
+                    key={idx}
+                    onClick={() => handleSelectChar(res.char)}
+                    className={`aspect-square bg-white rounded-xl shadow-sm border-2 flex flex-col items-center justify-center transition-all ${selectedChar === res.char ? 'border-red-500 bg-red-50 shadow-md' : 'border-transparent'
+                      }`}
+                  >
+                    <span className="text-2xl md:text-3xl font-bold text-gray-800">{res.char}</span>
+                    <span className="text-[10px] text-red-500/60 uppercase">
+                      {Array.isArray(res.pinyin) ? res.pinyin.join('/') : res.pinyin}
+                    </span>
+                  </button>
+                ))
+              ) : loading ? (
+                Array(12).fill(0).map((_, idx) => (
+                  <div key={idx} className="aspect-square bg-white rounded-xl border-2 border-transparent animate-pulse flex flex-col items-center justify-center">
+                    <div className="w-8 h-8 bg-gray-100 rounded mb-1"></div>
+                    <div className="w-10 h-2 bg-gray-50 rounded"></div>
+                  </div>
+                ))
+              ) : (
+                <div className="col-span-full py-10 text-center text-gray-400 text-xs">
+                  未找到匹配汉字
+                </div>
+              )}
             </div>
           </div>
         </aside>
@@ -152,7 +183,7 @@ const App: React.FC = () => {
                           className={`px-4 py-2 rounded-full text-lg font-bold ${playingText === detail.character ? 'bg-green-500 scale-105' : 'bg-red-600'} text-white shadow-lg active:scale-95 transition-all`}
                           onClick={() => handleSpeak(detail.character)}
                         >
-                          {detail.pinyin} {playingText === detail.character ? '🔊' : '🔈'}
+                          {Array.isArray(detail.pinyin) ? detail.pinyin.join(' / ') : detail.pinyin} {playingText === detail.character ? '🔊' : '🔈'}
                         </button>
                       </div>
                       <p className="text-xl text-gray-400 font-medium tracking-widest">汉字详情</p>
@@ -161,7 +192,7 @@ const App: React.FC = () => {
 
                   <div className="mb-12">
                     <h3 className="text-sm font-bold text-red-800/40 uppercase mb-4 tracking-widest">释义</h3>
-                    <p className="text-2xl md:text-3xl text-gray-800 leading-relaxed font-serif">{detail.meaning}</p>
+                    <p className="text-2xl md:text-3xl text-gray-800 leading-relaxed font-serif whitespace-pre-wrap">{detail.meaning}</p>
                   </div>
 
                   <div>

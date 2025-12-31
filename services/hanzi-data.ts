@@ -11,20 +11,14 @@ import 'cnchar-words';
 import { HanziInfo, SearchResult } from "../types";
 import { getFrequencySort } from "./frequency-data";
 
-// zdict.js 数据接口类型
-interface ZdictEntry {
-  pinyin?: string | string[];
-  definition?: string;
-  definitions?: string[];
-  words?: string[];
-  组词?: string[];
-  examples?: string[];
-}
+// zdict.js 数据接口类型: 拼音 -> 释义数组 的映射
+// 例如: { "shèng": ["兴旺...", "炽烈..."], "chéng": ["把东西放进去..."] }
+type ZdictEntry = Record<string, string[]>;
 
 // 缓存键名
 const CACHE_KEY = 'hanzi_meaning_cache';
 const ZDICT_CACHE_KEY = 'zdict_data_cache';
-const CACHE_VERSION = '3.0';
+const CACHE_VERSION = '3.1';
 const CACHE_EXPIRY = 30 * 24 * 60 * 60 * 1000; // 30天
 
 // zdict.js 数据存储
@@ -116,10 +110,12 @@ const loadZdictData = async (): Promise<void> => {
   // 获取项目的 base URL，确保在 GitHub Pages 的子目录下资源引用正确
   const baseUrl = (import.meta as any).env.BASE_URL || '/';
 
+  // 添加时间戳防止浏览器缓存旧文件
+  const timestamp = Date.now();
   const possiblePaths = [
-    `${baseUrl}zdict-data.json`,  // 自动适配 base URL 的路径
-    './zdict-data.json',           // 相对当前页面的路径
-    '/zdict-data.json',            // 根路径（备用）
+    `${baseUrl}zdict-data.json?v=${timestamp}`,
+    `./zdict-data.json?v=${timestamp}`,
+    `/zdict-data.json?v=${timestamp}`,
   ];
 
   let lastError: Error | null = null;
@@ -169,23 +165,32 @@ const loadZdictData = async (): Promise<void> => {
   }
 };
 
-// 从 zdict.js 获取汉字释义和组词
+// 从 zdict.js 获取汉字释义 (聚合所有多音字释义)
 const getMeaningFromZdict = (char: string): { meaning: string; examples: string[] } | null => {
   if (!ZDICT_LOADED || !ZDICT_DATA[char]) {
     return null;
   }
 
   const entry = ZDICT_DATA[char];
-  const meaning = entry.definition ||
-    (Array.isArray(entry.definitions) && entry.definitions.length > 0 ? entry.definitions[0] : null) ||
-    "暂无释义";
+  const pinyins = Object.keys(entry);
 
-  const examples = entry.words ||
-    entry.组词 ||
-    entry.examples ||
-    [];
+  if (pinyins.length === 0) return { meaning: "暂无释义", examples: [] };
 
-  return { meaning, examples };
+  // 如果只有一个拼音，直接返回其释义
+  if (pinyins.length === 1) {
+    const pinyin = pinyins[0];
+    const defs = entry[pinyin];
+    const meaning = defs && defs.length > 0 ? defs.join('；') : "暂无释义";
+    return { meaning, examples: [] };
+  }
+
+  // 如果有多个拼音，格式化展示
+  const meaning = pinyins.map(pinyin => {
+    const defs = entry[pinyin];
+    return `[${pinyin}] ${defs.join('；')}`;
+  }).join('\n\n');
+
+  return { meaning, examples: [] };
 };
 
 // 获取汉字释义和组词（优先使用 zdict.js，其次缓存）
@@ -235,7 +240,7 @@ const searchFromZdict = (pinyinPrefix: string): SearchResult[] => {
   let checkedCount = 0;
 
   // 遍历所有汉字，查找拼音匹配的
-  for (const [char, entry] of Object.entries(ZDICT_DATA)) {
+  for (const [char, pinyinMap] of Object.entries(ZDICT_DATA)) {
     checkedCount++;
 
     // 确保 char 是有效的单个汉字字符
@@ -243,26 +248,29 @@ const searchFromZdict = (pinyinPrefix: string): SearchResult[] => {
       continue;
     }
 
-    if (entry && entry.pinyin && typeof entry.pinyin === 'string') {
+    // pinyinMap 是 { "shèng": ["..."], "chéng": ["..."] }
+    // 遍历该字的所有拼音
+    for (const [pinyin, definitions] of Object.entries(pinyinMap)) {
       // 移除声调后进行比较
-      const entryPinyinNoTone = removeTone(entry.pinyin);
+      const entryPinyinNoTone = removeTone(pinyin);
 
       // 检查拼音是否以输入的前缀开头（精确或前缀匹配）
       if (entryPinyinNoTone.startsWith(normalizedPrefix)) {
-        const meaning = entry.definition || "常用汉字";
-        const brief = meaning.split('，')[0]?.split(',')[0] || meaning || "常用汉字";
+        // 构建释义简述
+        const firstDef = definitions && definitions.length > 0 ? definitions[0] : "常用汉字";
+        const brief = firstDef.split('，')[0]?.split('：')[0] || firstDef;
 
         results.push({
           char,
-          pinyin: entry.pinyin,
+          pinyin: pinyin, // 返回具体的带声调拼音
           brief
         });
 
-        // 获取更多结果，因为后面会过滤掉无效的
-        // 获取更多结果用于频率排序评分
-        if (results.length >= 100) break;
+        // 注意：这里不 break，因为一个字可能有多个拼音都匹配（虽然少见，但逻辑上允许）
       }
     }
+
+    if (results.length >= 500) break;
   }
 
   console.log(`zdict 搜索完成: 检查了 ${checkedCount} 个字符，找到 ${results.length} 个结果`);
@@ -276,7 +284,21 @@ export const searchCharactersByPinyin = async (keyword: string): Promise<SearchR
   }
 
   const results: SearchResult[] = [];
-  const foundChars = new Set<string>();
+  const foundKeys = new Set<string>(); // 用于去重 (char + pinyin)
+  const foundChars = new Set<string>(); // 用于标记已找到的汉字 (防止 cnchar 重复添加)
+
+  // 辅助函数：添加结果
+  const addResult = (result: SearchResult) => {
+    // 构造唯一键：字符+拼音
+    // 注意：ZDICT返回的拼音带声调，cnchar拼接的也带。
+    const key = `${result.char}_${result.pinyin}`;
+
+    if (foundKeys.has(key)) return;
+
+    foundKeys.add(key);
+    foundChars.add(result.char);
+    results.push(result);
+  };
 
   // 检查是否包含汉字
   const hasHanzi = /[\u4e00-\u9fa5]/.test(keyword);
@@ -284,142 +306,127 @@ export const searchCharactersByPinyin = async (keyword: string): Promise<SearchR
     // 提取搜索词中的所有汉字
     const chars = keyword.match(/[\u4e00-\u9fa5]/g) || [];
     for (const char of chars) {
-      if (foundChars.has(char)) continue;
-      foundChars.add(char);
+      if (foundChars.has(char)) continue; // 这里还是按字去重，因为直接查汉字不需要多音字分开展示
 
-      const pinyinResult = cnchar.spell(char, 'tone', 'low');
-      const pinyinStr = Array.isArray(pinyinResult) ? pinyinResult[0] : pinyinResult;
+      const pinyinResult = cnchar.spell(char, 'poly', 'tone', 'low');
+      const pinyinStr = Array.isArray(pinyinResult) ? pinyinResult.join('/') : (pinyinResult || "");
 
       const cached = MEANING_CACHE[char];
       const zdictResult = ZDICT_LOADED ? getMeaningFromZdict(char) : null;
       const meaning = zdictResult?.meaning || cached?.meaning || "常用汉字";
       const brief = meaning.split('，')[0]?.split(',')[0] || meaning || "常用汉字";
+      // 截取 brief 如果太长 (针对聚合的解释)
+      const displayBrief = brief.includes('\n') ? brief.split('\n')[0] + '...' : brief;
 
-      results.push({
+      addResult({
         char,
         pinyin: pinyinStr,
-        brief
+        brief: displayBrief
       });
     }
 
     // 如果直接输入的是汉字，优先返回匹配的汉字
-    if (results.length > 0) return results.slice(0, 12);
+    if (results.length > 0) return results;
   }
 
   // 移除音调，转换为小写用于拼音搜索
   const normalizedPinyin = keyword.toLowerCase().replace(/[1-5]/g, '');
 
-  // 方法1: 尝试使用 cnchar 精确搜索
-  try {
-    const spellResult = cnchar.spellToWord(normalizedPinyin);
-    const characters: string[] = Array.isArray(spellResult)
-      ? spellResult
-      : (typeof spellResult === 'string' ? [spellResult] : []);
-
-    // 获取更多结果，因为后面会过滤掉无效的
-    // 获取更多结果用于频率排序评分
-    for (const char of characters.slice(0, 100)) {
-      if (foundChars.has(char)) continue;
-      foundChars.add(char);
-
-      const pinyinResult = cnchar.spell(char, 'tone', 'low');
-      const pinyinStr = Array.isArray(pinyinResult) ? pinyinResult[0] : (pinyinResult || normalizedPinyin);
-
-      const cached = MEANING_CACHE[char];
-      const zdictResult = ZDICT_LOADED ? getMeaningFromZdict(char) : null;
-      const meaning = zdictResult?.meaning || cached?.meaning || "常用汉字";
-      const brief = meaning.split('，')[0]?.split(',')[0] || meaning || "常用汉字";
-
-      results.push({
-        char,
-        pinyin: pinyinStr,
-        brief
-      });
-    }
-  } catch (error) {
-    // cnchar 搜索失败（可能是无效拼音），继续使用近似搜索
-    console.log('cnchar 精确搜索失败，使用近似搜索:', error);
-  }
-
-  // 方法2: 如果结果不足或 cnchar 搜索失败，使用 zdict 近似搜索
-  // 优先使用 zdict，因为它有更完整的数据
-  if (results.length < 12 && ZDICT_LOADED) {
-    console.log(`使用 zdict 搜索补充结果: "${normalizedPinyin}"`);
+  // 方法1: 使用 zdict 近似搜索（数据最完整，包含多音字）
+  if (ZDICT_LOADED) {
+    console.log(`使用 zdict 搜索: "${normalizedPinyin}"`);
     const zdictResults = searchFromZdict(normalizedPinyin);
 
     for (const result of zdictResults) {
-      if (foundChars.has(result.char)) continue;
-      // 获取更多结果用于频率排序评分
-      if (results.length >= 100) break;
-
-      foundChars.add(result.char);
-      results.push(result);
+      if (results.length >= 1000) break;
+      addResult(result);
     }
-  } else if (!ZDICT_LOADED) {
-    console.log('zdict 数据未加载，无法进行近似搜索');
   }
 
-  // 如果仍然没有结果，直接使用 zdict 搜索（即使 cnchar 搜索成功但返回空）
-  if (results.length === 0 && ZDICT_LOADED) {
-    console.log(`zdict 作为主要搜索方式: "${normalizedPinyin}"`);
-    const zdictResults = searchFromZdict(normalizedPinyin);
-    return zdictResults.slice(0, 12);
-  }
-
-  // 方法3: 如果还是不足，尝试更短的前缀搜索
-  if (results.length < 5 && normalizedPinyin.length > 1) {
-    // 尝试使用前几个字母进行搜索
-    const shorterPrefix = normalizedPinyin.slice(0, -1);
-
-    // 先尝试 cnchar
+  // 方法2: 尝试使用 cnchar 搜索补充（如果有 zdict 没覆盖到的字）
+  if (results.length < 1000) {
     try {
-      const partialResult = cnchar.spellToWord(shorterPrefix);
-      const partialChars: string[] = Array.isArray(partialResult)
-        ? partialResult
-        : (typeof partialResult === 'string' ? [partialResult] : []);
+      const spellResult = cnchar.spellToWord(normalizedPinyin);
+      const characters: string[] = Array.isArray(spellResult)
+        ? spellResult
+        : (typeof spellResult === 'string' ? [spellResult] : []);
 
-      for (const char of partialChars) {
-        // 确保是有效的汉字字符
-        if (!char || char.length !== 1 || !/[\u4e00-\u9fa5]/.test(char)) {
-          continue;
-        }
+      for (const char of characters) {
+        if (foundChars.has(char)) continue; // 如果 zdict 已经有了该字（任意读音），cnchar 就不加了
+        if (results.length >= 1000) break;
 
-        if (foundChars.has(char)) continue;
-        // 获取更多结果，因为后面会过滤掉无效的
-        // 获取更多结果用于频率排序评分
-        if (results.length >= 100) break;
+        const pinyinResult = cnchar.spell(char, 'poly', 'tone', 'low');
+        const pinyinStr = Array.isArray(pinyinResult) ? pinyinResult.join('/') : (pinyinResult || "");
 
-        foundChars.add(char);
-        const pinyinResult = cnchar.spell(char, 'tone', 'low');
-        const pinyinStr = Array.isArray(pinyinResult) ? pinyinResult[0] : (pinyinResult || shorterPrefix);
         const cached = MEANING_CACHE[char];
         const zdictResult = ZDICT_LOADED ? getMeaningFromZdict(char) : null;
         const meaning = zdictResult?.meaning || cached?.meaning || "常用汉字";
         const brief = meaning.split('，')[0]?.split(',')[0] || meaning || "常用汉字";
+        const displayBrief = brief.includes('\n') ? brief.split('\n')[0] + '...' : brief;
 
-        results.push({
+        addResult({
           char,
           pinyin: pinyinStr,
-          brief
+          brief: displayBrief
         });
       }
-    } catch (e) {
-      // 忽略错误
+    } catch (error) {
+      console.log('cnchar 搜索失败:', error);
+    }
+  }
+
+  // 方法3: 如果还是不足，尝试更短的前缀搜索（模糊匹配）
+  if (results.length < 10 && normalizedPinyin.length > 1) {
+    const shorterPrefix = normalizedPinyin.slice(0, -1);
+
+    // 模糊匹配也优先使用 zdict
+    if (ZDICT_LOADED) {
+      const zdictResults = searchFromZdict(shorterPrefix);
+      for (const result of zdictResults) {
+        if (results.length >= 1000) break;
+        // 注意：这里我们允许添加新的多音字结果，但要避免完全重复 (由 addResult 处理)
+        // 另外，如果有更高优先级的精确搜索已经找到了该字的至少一个读音，
+        // 我们是否还要显示模糊匹配的其他读音？
+        // 逻辑上：如果搜 "she", 出了 "shèng". 模糊搜 "sh", 也会出 "shèng" (去重跳过).
+        // 也会出 "chéng"? "ch" 不匹配 "sh". 
+        // 所以模糊搜索只会补充 匹配 shorterPrefix 的结果.
+
+        // 唯一的问题：如果 Method 1 找到了 char A (pinyin 1).
+        // Method 3 找到了 char A (pinyin 2). 
+        // 它们是不同的 search result. 显示出来没问题。
+
+        addResult(result);
+      }
     }
 
-    // 再尝试 zdict 近似搜索
-    if (results.length < 12 && ZDICT_LOADED) {
-      const zdictResults = searchFromZdict(shorterPrefix);
+    // 补充 cnchar 模糊匹配
+    if (results.length < 1000) {
+      try {
+        const partialResult = cnchar.spellToWord(shorterPrefix);
+        const partialChars: string[] = Array.isArray(partialResult)
+          ? partialResult
+          : (typeof partialResult === 'string' ? [partialResult] : []);
 
-      for (const result of zdictResults) {
-        if (foundChars.has(result.char)) continue;
-        // 获取更多结果，因为后面会过滤掉无效的
-        // 获取更多结果用于频率排序评分
-        if (results.length >= 100) break;
+        for (const char of partialChars) {
+          if (!char || char.length !== 1 || !/[\u4e00-\u9fa5]/.test(char)) continue;
+          if (foundChars.has(char)) continue; // 同样防止重复
+          if (results.length >= 1000) break;
 
-        foundChars.add(result.char);
-        results.push(result);
-      }
+          const pinyinResult = cnchar.spell(char, 'poly', 'tone', 'low');
+          const pinyinStr = Array.isArray(pinyinResult) ? pinyinResult.join('/') : (pinyinResult || shorterPrefix);
+          const cached = MEANING_CACHE[char];
+          const zdictResult = ZDICT_LOADED ? getMeaningFromZdict(char) : null;
+          const meaning = zdictResult?.meaning || cached?.meaning || "常用汉字";
+          const brief = meaning.split('，')[0]?.split(',')[0] || meaning || "常用汉字";
+          const displayBrief = brief.includes('\n') ? brief.split('\n')[0] + '...' : brief;
+
+          addResult({
+            char,
+            pinyin: pinyinStr,
+            brief: displayBrief
+          });
+        }
+      } catch (e) { }
     }
   }
 
@@ -430,12 +437,32 @@ export const searchCharactersByPinyin = async (keyword: string): Promise<SearchR
     /[\u4e00-\u9fa5]/.test(result.char)
   );
 
-  // 按频率排序
+  // 按匹配程度 + 频率排序
   const sortedResults = [...validResults].sort((a, b) => {
+    // 获取无声调拼音
+    const getNormPinyin = (p: string | string[]) => {
+      const pStr = Array.isArray(p) ? p[0] : p;
+      return removeTone(pStr || "");
+    };
+
+    const aNorm = getNormPinyin(a.pinyin);
+    const bNorm = getNormPinyin(b.pinyin);
+
+    // 1. 优先完全匹配 (如果 normalizedPinyin 和搜索词一样)
+    // 虽然字母排序通常能处理，但显式处理更安全
+    // 比如搜索 "an"，"an" < "ang"。
+
+    // 字母顺序排序 (实现了 wan 在 wang 前面，也实现了 grouping)
+    if (aNorm !== bNorm) {
+      // 那个跟搜索词长度越接近（越短）的通常越靠前（字母序 naturally handles prefixes: a < ab）
+      return aNorm.localeCompare(bNorm);
+    }
+
+    // 2. 同拼音，按字频排序
     return getFrequencySort(a.char) - getFrequencySort(b.char);
   });
 
-  return sortedResults.slice(0, 12);
+  return sortedResults;
 };
 
 // 获取汉字详情（使用 cnchar + zdict.js）
@@ -446,8 +473,8 @@ export const getCharacterDetails = async (char: string): Promise<HanziInfo | nul
 
   try {
     // 使用 cnchar 获取基础信息
-    const pinyinResult = cnchar.spell(char, 'tone', 'low');
-    const pinyin = Array.isArray(pinyinResult) ? pinyinResult[0] : (pinyinResult || "");
+    const pinyinResult = cnchar.spell(char, 'poly', 'tone', 'low');
+    const pinyin = Array.isArray(pinyinResult) ? (pinyinResult.length > 1 ? pinyinResult : pinyinResult[0]) : (pinyinResult || "");
 
     // cnchar.stroke 可能返回数字或数组，确保是数字
     const strokeResult = cnchar.stroke(char);
@@ -685,17 +712,17 @@ export const getRandomInitialResults = async (): Promise<SearchResult[]> => {
       if (results.length >= 12) break;
       if (seenChars.has(char)) continue;
 
-      const py = cnchar.spell(char, 'tone', 'low') as string;
+      const py = cnchar.spell(char, 'poly', 'tone', 'low');
       results.push({
         char,
-        pinyin: Array.isArray(py) ? py[0] : py,
+        pinyin: Array.isArray(py) ? py.join('/') : (py || ""),
         brief: "常用汉字"
       });
       seenChars.add(char);
     }
   }
 
-  return results.slice(0, 12);
+  return results;
 };
 
 if (typeof window !== 'undefined') {

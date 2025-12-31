@@ -1,7 +1,7 @@
 
 export interface HanziInfo {
   character: string;
-  pinyin: string;
+  pinyin: string | string[];
   meaning: string;
   radical: string;
   strokes: number;
@@ -10,7 +10,7 @@ export interface HanziInfo {
 
 export interface SearchResult {
   char: string;
-  pinyin: string;
+  pinyin: string | string[];
   brief: string;
 }
 

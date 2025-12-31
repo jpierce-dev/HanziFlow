@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 
 interface SearchBarProps {
   onSearch: (pinyin: string) => void;
@@ -9,13 +9,16 @@ interface SearchBarProps {
 const SearchBar: React.FC<SearchBarProps> = ({ onSearch, isLoading }) => {
   const [query, setQuery] = useState('');
 
-  // 实现即输即搜，添加 300ms 防抖，避免频繁触发
+  const lastSearchQuery = useRef('');
+
   useEffect(() => {
+    const trimmedQuery = query.trim().toLowerCase();
+    if (!trimmedQuery || trimmedQuery === lastSearchQuery.current) return;
+
     const timer = setTimeout(() => {
-      if (query.trim()) {
-        onSearch(query.trim().toLowerCase());
-      }
-    }, 150); // 本地搜索很快，150ms 延迟足以平衡响应速度和性能
+      onSearch(trimmedQuery);
+      lastSearchQuery.current = trimmedQuery;
+    }, 150);
 
     return () => clearTimeout(timer);
   }, [query, onSearch]);
