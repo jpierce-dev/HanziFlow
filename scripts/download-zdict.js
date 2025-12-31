@@ -26,30 +26,42 @@ const OUTPUT_PATH = path.join(__dirname, '../public/zdict-data.json');
 // 尝试从 npm 包加载数据
 async function loadFromNpmPackage() {
   try {
-    // 尝试导入 @xiee/zdict 包
+    // 1. 优先尝试加载 @xiee/zdict
+    // 注意：zdict 的主入口导出的默认对象包含 { chars, freqs }
+    // 我们需要的是 chars
     const zdictModule = await import('@xiee/zdict/js/zdict.js');
-
-    // 获取数据（可能是 default 导出或直接导出）
     const data = zdictModule.default || zdictModule;
 
-    if (data && typeof data === 'object') {
-      return data;
+    if (data && data.chars) {
+      return data.chars;
     }
 
-    throw new Error('无法从 npm 包中提取数据');
-  } catch (error) {
-    console.log('从 npm 包加载失败，尝试从文件系统读取...');
+    // 如果没有 chars 属性，可能是直接加载了 data-chars.js?
+    // 或者是 zdict.js 结构不同
+    if (data && typeof data === 'object') {
+      // 检查是否看起来像 chars 数据 (key 是汉字, value 是对象)
+      const keys = Object.keys(data);
+      if (keys.length > 500 && data["一"]) {
+        return data;
+      }
+    }
 
-    // 尝试从 node_modules 直接读取（尝试多个可能的文件名）
+    throw new Error('npm 包导出格式不符合预期');
+  } catch (error) {
+    console.log(`从 npm 包导入失败 (${error.message})，尝试从文件系统读取...`);
+
+    // 2. 尝试从 node_modules 直接读取 data-chars.js
+    // zdict.js 可能会做合并，我们直接读取原始数据文件更安全
     const possibleFiles = [
-      path.join(__dirname, '../node_modules/@xiee/zdict/js/zdict.js'),
       path.join(__dirname, '../node_modules/@xiee/zdict/js/data-chars.js'),
+      path.join(__dirname, '../node_modules/@xiee/zdict/js/zdict.js'),
     ];
 
     let nodeModulesPath = null;
     for (const filePath of possibleFiles) {
       if (fs.existsSync(filePath)) {
         nodeModulesPath = filePath;
+        console.log(`找到文件: ${filePath}`);
         break;
       }
     }
@@ -62,36 +74,43 @@ async function loadFromNpmPackage() {
       // 读取文件内容
       const fileContent = fs.readFileSync(nodeModulesPath, 'utf8');
 
-      // 这是一个 UMD 模块，需要执行 factory 函数
-      // 创建一个模拟的 module 环境
+      // 处理 export default
+      let jsonContent = fileContent;
+      if (jsonContent.includes('export default')) {
+        jsonContent = jsonContent.replace('export default', 'module.exports =');
+      }
+
+      // 创建模拟环境
       const module = { exports: {} };
       const exports = module.exports;
 
-      // 执行 UMD 包装的代码
-      // 这会设置 module.exports
-      eval(fileContent);
-
-      // 如果 module.exports 是一个函数（factory），调用它
-      if (typeof module.exports === 'function') {
-        return module.exports();
-      }
-
-      // 如果 module.exports 是对象，直接返回
-      if (typeof module.exports === 'object' && module.exports !== null) {
-        // 检查是否有 chars 属性（zdict.js 的数据结构）
-        if (module.exports.chars) {
-          return module.exports.chars;
+      // 简单 eval
+      // 注意：data-chars.js 可能引用其他文件？不，它通常是纯数据
+      // zdict.js 引用 imports，eval 会失败。所以优先找 data-chars.js
+      try {
+        eval(jsonContent);
+      } catch (evalError) {
+        // 如果是 zdict.js 含有 import 语句，eval 会挂
+        // 我们只能希望 node_modules 里有 data-chars.js
+        if (nodeModulesPath.endsWith('zdict.js')) {
+          throw new Error('无法直接解析 zdict.js (可能包含 import), 请确保 data-chars.js 存在');
         }
-        return module.exports;
+        throw evalError;
       }
 
-      throw new Error('无法解析模块格式');
+      let result = module.exports;
+      if (typeof result === 'function') result = result();
+
+      // 如果是 zdict.js 结构
+      if (result.chars) return result.chars;
+
+      // 如果直接是数据
+      return result;
+
     } catch (e) {
-      throw new Error(`读取文件失败: ${e.message}`);
+      throw new Error(`读取/解析文件失败: ${e.message}`);
     }
   }
-
-  throw new Error('npm 包未安装或数据文件不存在');
 }
 
 // 转换数据格式（确保符合新的接口：Char -> Pinyin -> Definitions[]）
