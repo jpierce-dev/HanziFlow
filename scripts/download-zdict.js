@@ -94,37 +94,16 @@ async function loadFromNpmPackage() {
   throw new Error('npm 包未安装或数据文件不存在');
 }
 
-// 转换数据格式（确保符合我们的接口）
-// zdict.js 的数据格式是: { "一": { "yī": ["释义1", "释义2", ...] } }
+// 转换数据格式（确保符合新的接口：Char -> Pinyin -> Definitions[]）
+// zdict.js 的原始数据格式已经是: { "一": { "yī": ["释义1", "释义2", ...] } }
+// 我们只需要保留这个结构，不需要展平
 function convertDataFormat(data) {
   const result = {};
 
   for (const [char, entry] of Object.entries(data)) {
     if (typeof entry === 'object' && entry !== null) {
-      // zdict.js 格式：entry 是一个对象，键是拼音，值是释义数组
-      let definitions = [];
-      let pinyins = [];
-
-      // 收集所有拼音和释义
-      for (const [py, defs] of Object.entries(entry)) {
-        if (Array.isArray(defs)) {
-          definitions.push(...defs);
-          // 收集所有拼音
-          if (!pinyins.includes(py)) {
-            pinyins.push(py);
-          }
-        }
-      }
-
-      // 标准化数据格式
-      result[char] = {
-        definition: definitions[0] || '',
-        definitions: definitions,
-        words: [], // zdict.js 不包含组词，需要从其他地方获取
-        组词: [],
-        examples: [],
-        pinyin: pinyins.length > 1 ? pinyins : (pinyins[0] || '')
-      };
+      // 直接保留原始结构：{ "yī": ["..."] }
+      result[char] = entry;
     }
   }
 
